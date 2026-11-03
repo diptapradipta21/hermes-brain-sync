@@ -16,9 +16,10 @@ Running autonomous AI coding agents (Hermes, Claude Code, AutoGen) on remote ser
 
 ## 🚀 The Solution
 `hermes-brain-sync` is a lightweight, zero-token CLI tool that:
-1. **Mirrors Agent Memories & Learned Skills:** Safely clones the agent's procedural skills, prompt templates, and persistent facts.
+1. **Bi-Directional Mirroring:** Forward syncs (`agent -> vault`) and restores (`vault -> agent`) procedural skills, prompt templates, and persistent facts.
 2. **Filters Heavy Build Artifacts:** Automatically excludes `.cache`, `node_modules`, `__pycache__`, and temporary locks.
-3. **Automated Git Rebase & Push:** Seamlessly commits changes and pushes them to your private/team Obsidian Git repository so your laptop is always 100% in sync with your VPS agent.
+3. **Automated Git Rebase & Push:** Seamlessly commits changes and pushes them to your private/team Obsidian Git repository.
+4. **Agent Orchestration Ready:** Includes `--dry-run`, `--json` telemetry, and custom exclusions for automated cron pipelines.
 
 ---
 
@@ -41,11 +42,43 @@ No external dependencies required (Pure Python Standard Library).
 python3 hermes_brain_sync.py --agent-root /path/to/hermes --vault /path/to/obsidian-vault --push
 ```
 
-### 2. Set up Automated Cronjob (Sync Every Hour)
+### 2. Preview Changes (Dry Run)
 ```bash
-crontab -e
+python3 hermes_brain_sync.py --agent-root /path/to/hermes --vault /path/to/obsidian-vault --dry-run
 ```
-Add the following line:
+
+### 3. Restore Brain from Vault (Disaster Recovery / New Node)
+```bash
+python3 hermes_brain_sync.py --vault /path/to/obsidian-vault --agent-root /path/to/new-hermes --restore
+```
+
+### 4. Machine-Readable JSON Telemetry
+```bash
+python3 hermes_brain_sync.py --agent-root . --vault /path/to/vault --json
+```
+
+Output:
+```json
+{
+  "status": "success",
+  "mode": "sync",
+  "agent_root": "/opt/data",
+  "vault_dir": "/opt/data/vault",
+  "sync_dir": "/opt/data/vault/_Agent_Sync",
+  "dry_run": false,
+  "counts": {
+    "memories": 4,
+    "skills": 12,
+    "scripts": 6,
+    "total": 22
+  },
+  "git_pushed": false,
+  "git_output": null,
+  "error": null
+}
+```
+
+### 5. Automated Cron Job (Sync Every Hour)
 ```cron
 0 * * * * python3 /path/to/hermes_brain_sync.py --agent-root /opt/data --vault /opt/data/obsidian-vault --push >> /var/log/brain_sync.log 2>&1
 ```
@@ -64,6 +97,30 @@ My-Obsidian-Vault/
     ├── memories/       <-- Persistent facts & preferences
     ├── skills/         <-- Procedural skills & markdown guides
     └── scripts/        <-- Custom agent helper scripts
+```
+
+---
+
+## 🛠️ CLI Options
+
+| Flag | Description | Default |
+|---|---|---|
+| `--agent-root PATH` | Path to AI agent working directory | `.` |
+| `--vault PATH` | Path to your Obsidian Vault directory | *(Required)* |
+| `--sync-folder NAME` | Subfolder name inside vault | `_Agent_Sync` |
+| `--push` | Commit and git push changes to remote Git vault | `False` |
+| `--restore` | Reverse sync: restore vault files into agent root | `False` |
+| `--dry-run` | Preview file operations without modifying disk or Git | `False` |
+| `--exclude PATTERN` | Additional glob pattern to ignore (repeatable) | `[]` |
+| `--commit-msg MSG` | Custom commit message for Git versioning | *(Auto-generated)* |
+| `--json` | Output machine-readable JSON summary | `False` |
+
+---
+
+## 🧪 Running Tests
+
+```bash
+python3 tests/test_hermes_brain_sync.py
 ```
 
 ---

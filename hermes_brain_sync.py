@@ -2,6 +2,7 @@
 """
 hermes_brain_sync — Zero-Token Bi-Directional Memory & Skill Mirror for AI Agents.
 Syncs local agent memories, learned skills, and custom scripts into a Git-backed Obsidian Vault.
+Supports sync (agent -> vault), restore (vault -> agent), dry-run, and JSON telemetry output.
 """
 
 import os
@@ -9,79 +10,179 @@ import sys
 import shutil
 import subprocess
 import argparse
+import json
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import List, Tuple, Dict, Any, Optional
 
-def run_cmd(cmd, cwd=None):
+DEFAULT_EXCLUDES = [
+    "*.lock", "*.tmp", ".git", "__pycache__",
+    "node_modules", ".cache", "*.pyc", ".DS_Store"
+]
+
+def run_cmd(cmd: str, cwd: Optional[Path] = None) -> Tuple[bool, str, str]:
     res = subprocess.run(cmd, cwd=cwd, shell=True, capture_output=True, text=True)
     return res.returncode == 0, res.stdout.strip(), res.stderr.strip()
 
-def sync_brain(agent_root, vault_dir, sync_folder="_Agent_Sync", auto_push=False):
-    agent_root = Path(agent_root).resolve()
-    vault_dir = Path(vault_dir).resolve()
-    sync_dir = vault_dir / sync_folder
+def collect_files(source_dir: Path, exclude_patterns: List[str]) -> List[Path]:
+    """Collect relative file paths from source_dir, filtering out exclusion patterns."""
+    if not source_dir.exists():
+        return []
+    collected = []
+    for item in source_dir.rglob("*"):
+        if not item.is_file():
+            continue
+        rel = item.relative_to(source_dir)
+        skip = False
+        for pat in exclude_patterns:
+            clean_pat = pat.strip("*.")
+            if item.match(pat) or any(part == clean_pat or part.startswith(clean_pat) for part in rel.parts):
+                skip = True
+                break
+        if not skip:
+            collected.append(rel)
+    return collected
 
-    print(f"[*] Starting agent brain synchronization...")
-    print(f"    Source: {agent_root}")
-    print(f"    Target Vault: {sync_dir}")
+def mirror_directory(src: Path, dst: Path, exclude_patterns: List[str], dry_run: bool = False) -> int:
+    """Mirrors files from src to dst. Returns count of files copied."""
+    if not src.exists():
+        return 0
+    rel_files = collect_files(src, exclude_patterns)
+    copied = 0
+    for rel in rel_files:
+        src_file = src / rel
+        dst_file = dst / rel
+        if not dry_run:
+            dst_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_file, dst_file)
+        copied += 1
+    return copied
 
-    sync_dir.mkdir(parents=True, exist_ok=True)
-    dest_mem = sync_dir / "memories"
-    dest_skills = sync_dir / "skills"
-    dest_scripts = sync_dir / "scripts"
+def sync_brain(
+    agent_root: str,
+    vault_dir: str,
+    sync_folder: str = "_Agent_Sync",
+    auto_push: bool = False,
+    restore: bool = False,
+    dry_run: bool = False,
+    custom_excludes: Optional[List[str]] = None,
+    commit_msg: Optional[str] = None,
+    output_json: bool = False
+) -> Dict[str, Any]:
+    agent_path = Path(agent_root).resolve()
+    vault_path = Path(vault_dir).resolve()
+    sync_path = vault_path / sync_folder
 
-    # 1. Sync Memories
-    src_mem = agent_root / "memories"
-    if src_mem.exists():
-        print("  -> Mirroring persistent memory files...")
-        shutil.copytree(src_mem, dest_mem, dirs_exist_ok=True, ignore=shutil.ignore_patterns("*.lock", "*.tmp"))
+    excludes = list(DEFAULT_EXCLUDES)
+    if custom_excludes:
+        excludes.extend(custom_excludes)
 
-    # 2. Sync Skills
-    src_skills = agent_root / "skills"
-    if src_skills.exists():
-        print("  -> Mirroring procedural skills...")
-        shutil.copytree(
-            src_skills, 
-            dest_skills, 
-            dirs_exist_ok=True, 
-            ignore=shutil.ignore_patterns(".git", "__pycache__", "node_modules", ".cache", "*.pyc")
-        )
+    result = {
+        "status": "success",
+        "mode": "restore" if restore else "sync",
+        "agent_root": str(agent_path),
+        "vault_dir": str(vault_path),
+        "sync_dir": str(sync_path),
+        "dry_run": dry_run,
+        "counts": {"memories": 0, "skills": 0, "scripts": 0, "total": 0},
+        "git_pushed": False,
+        "git_output": None,
+        "error": None
+    }
 
-    # 3. Sync Custom Scripts / Helpers
-    src_scripts = agent_root / "scripts"
-    if src_scripts.exists():
-        print("  -> Mirroring automation scripts...")
-        dest_scripts.mkdir(parents=True, exist_ok=True)
-        for item in src_scripts.glob("*.py"):
-            shutil.copy2(item, dest_scripts / item.name)
-
-    # 4. Git Versioning
-    if auto_push and (vault_dir / ".git").exists():
-        print("  -> Updating Git repository...")
-        run_cmd("git pull --rebase origin main", cwd=vault_dir)
-        run_cmd(f"git add {sync_folder}", cwd=vault_dir)
-        
-        ok, out, _ = run_cmd(f"git status --porcelain {sync_folder}", cwd=vault_dir)
-        if out:
-            run_cmd('git commit -m "chore(sync): automated AI agent brain & memory mirror"', cwd=vault_dir)
-            p_ok, _, p_err = run_cmd("git push origin main", cwd=vault_dir)
-            if p_ok:
-                print("  [✓] Successfully committed and pushed to remote Git repository.")
-            else:
-                print(f"  [!] Git push error: {p_err}")
-        else:
-            print("  [✓] Vault already up-to-date. No diff detected.")
+    if restore:
+        src_base = sync_path
+        dst_base = agent_path
+        if not src_base.exists():
+            result["status"] = "error"
+            result["error"] = f"Vault sync folder does not exist: {sync_path}"
+            if not output_json:
+                print(f"[!] Error: {result['error']}", file=sys.stderr)
+            return result
     else:
-        print("  [✓] Local mirror updated successfully.")
+        src_base = agent_path
+        dst_base = sync_path
+
+    if not output_json:
+        action_verb = "Restoring" if restore else "Starting agent brain synchronization"
+        dry_str = " (DRY-RUN)" if dry_run else ""
+        print(f"[*] {action_verb}{dry_str}...")
+        print(f"    Source: {src_base}")
+        print(f"    Target: {dst_base}")
+
+    total_cnt = 0
+    for cat in ["memories", "skills", "scripts"]:
+        src_cat = src_base / cat
+        dst_cat = dst_base / cat
+        cnt = mirror_directory(src_cat, dst_cat, excludes, dry_run=dry_run)
+        result["counts"][cat] = cnt
+        total_cnt += cnt
+        if not output_json and cnt > 0:
+            print(f"  -> {cat.capitalize()}: {cnt} file(s) mirrored.")
+
+    result["counts"]["total"] = total_cnt
+
+    # Git Versioning (only forward sync, non-dry-run, auto_push requested)
+    if not restore and auto_push and not dry_run and (vault_path / ".git").exists():
+        if not output_json:
+            print("  -> Updating Git repository...")
+        run_cmd("git pull --rebase origin main", cwd=vault_path)
+        run_cmd(f"git add {sync_folder}", cwd=vault_path)
+
+        ok, out, _ = run_cmd(f"git status --porcelain {sync_folder}", cwd=vault_path)
+        if out:
+            now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+            msg = commit_msg or f"chore(sync): automated brain mirror {now_iso}"
+            run_cmd(f'git commit -m "{msg}"', cwd=vault_path)
+            p_ok, p_out, p_err = run_cmd("git push origin main", cwd=vault_path)
+            result["git_pushed"] = p_ok
+            result["git_output"] = p_out if p_ok else p_err
+            if not output_json:
+                if p_ok:
+                    print("  [✓] Successfully committed and pushed to remote Git repository.")
+                else:
+                    print(f"  [!] Git push error: {p_err}", file=sys.stderr)
+        else:
+            result["git_pushed"] = False
+            result["git_output"] = "clean"
+            if not output_json:
+                print("  [✓] Vault already up-to-date. No diff detected.")
+    elif not output_json:
+        print("  [✓] Mirror operation finished successfully.")
+
+    return result
 
 def main():
-    parser = argparse.ArgumentParser(description="Hermes Brain Sync: Automated Git/Obsidian mirror for AI agents.")
+    parser = argparse.ArgumentParser(
+        description="Hermes Brain Sync: Automated Git/Obsidian bi-directional mirror for AI agents."
+    )
     parser.add_argument("--agent-root", default=".", help="Path to AI agent working directory (default: current dir)")
     parser.add_argument("--vault", required=True, help="Path to your Obsidian Vault directory")
     parser.add_argument("--sync-folder", default="_Agent_Sync", help="Subfolder name inside vault (default: _Agent_Sync)")
     parser.add_argument("--push", action="store_true", help="Automatically commit and git push changes to remote")
+    parser.add_argument("--restore", action="store_true", help="Reverse sync: Restore brain from vault into agent-root")
+    parser.add_argument("--dry-run", action="store_true", help="Preview sync actions without modifying filesystem or Git")
+    parser.add_argument("--exclude", action="append", default=[], help="Additional glob pattern to exclude (repeatable)")
+    parser.add_argument("--commit-msg", default=None, help="Custom commit message for Git versioning")
+    parser.add_argument("--json", action="store_true", help="Output machine-readable JSON summary")
 
     args = parser.parse_args()
-    sync_brain(args.agent_root, args.vault, args.sync_folder, args.push)
+    res = sync_brain(
+        agent_root=args.agent_root,
+        vault_dir=args.vault,
+        sync_folder=args.sync_folder,
+        auto_push=args.push,
+        restore=args.restore,
+        dry_run=args.dry_run,
+        custom_excludes=args.exclude,
+        commit_msg=args.commit_msg,
+        output_json=args.json
+    )
+
+    if args.json:
+        print(json.dumps(res, indent=2))
+
+    sys.exit(0 if res.get("status") == "success" else 1)
 
 if __name__ == "__main__":
     main()
