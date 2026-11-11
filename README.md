@@ -66,12 +66,14 @@ Output:
   "vault_dir": "/opt/data/vault",
   "sync_dir": "/opt/data/vault/_Agent_Sync",
   "dry_run": false,
+  "prune": false,
   "counts": {
     "memories": 4,
     "skills": 12,
     "scripts": 6,
     "total": 22
   },
+  "pruned": 0,
   "git_pushed": false,
   "git_output": null,
   "error": null
@@ -111,6 +113,7 @@ My-Obsidian-Vault/
 | `--push` | Commit and git push changes to remote Git vault | `False` |
 | `--restore` | Reverse sync: restore vault files into agent root | `False` |
 | `--dry-run` | Preview file operations without modifying disk or Git | `False` |
+| `--prune` | Remove stale files in destination not present in source | `False` |
 | `--exclude PATTERN` | Additional glob pattern to ignore (repeatable) | `[]` |
 | `--commit-msg MSG` | Custom commit message for Git versioning | *(Auto-generated)* |
 | `--json` | Output machine-readable JSON summary | `False` |
