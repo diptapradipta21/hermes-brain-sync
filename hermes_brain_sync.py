@@ -11,6 +11,7 @@ import json
 import shutil
 import subprocess
 import sys
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -222,6 +223,8 @@ def sync_brain(
 
 
 def main() -> None:
+    logger = logging.getLogger("hermes-brain-sync")
+    logger.addHandler(logging.StreamHandler())
     parser = argparse.ArgumentParser(
         description="Hermes Brain Sync: Automated Git/Obsidian bi-directional mirror for AI agents."
     )
