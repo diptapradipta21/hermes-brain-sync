@@ -117,6 +117,7 @@ My-Obsidian-Vault/
 | `--exclude PATTERN` | Additional glob pattern to ignore (repeatable) | `[]` |
 | `--commit-msg MSG` | Custom commit message for Git versioning | *(Auto-generated)* |
 | `--json` | Output machine-readable JSON summary | `False` |
+| `--version` | Print version and exit | |
 
 ---
 
@@ -131,6 +132,7 @@ python3 tests/test_hermes_brain_sync.py
 ## 🛡️ Security Best Practices
 - Never store plaintext API keys or credentials in synced directories.
 - Always use a dedicated SSH deploy key with write permissions for your private vault repository.
+- `--sync-folder` only accepts relative paths inside the vault; absolute paths and `..` segments are rejected so a mirror can never write outside the vault.
 
 ---
 

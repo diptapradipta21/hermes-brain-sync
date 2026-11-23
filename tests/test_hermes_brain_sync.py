@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from hermes_brain_sync import DEFAULT_EXCLUDES, collect_files, sync_brain
+from hermes_brain_sync import DEFAULT_EXCLUDES, collect_files, sync_brain, validate_sync_folder
 
 
 class TestHermesBrainSync(unittest.TestCase):
@@ -155,6 +155,32 @@ class TestHermesBrainSync(unittest.TestCase):
             output_json=True,
         )
         self.assertEqual(res["status"], "error")
+
+    def test_rejects_escaping_sync_folder(self):
+        for bad in ["/etc", "../outside", "nested/../../x", "  "]:
+            self.assertIsNotNone(validate_sync_folder(bad), bad)
+        self.assertIsNone(validate_sync_folder("_Agent_Sync"))
+        self.assertIsNone(validate_sync_folder("nested/dir"))
+
+    def test_escaping_sync_folder_fails_without_writing(self):
+        res = sync_brain(
+            agent_root=str(self.agent_root),
+            vault_dir=str(self.vault_dir),
+            sync_folder="../escaped",
+            output_json=True,
+        )
+        self.assertEqual(res["status"], "error")
+        self.assertIn("Invalid --sync-folder", res["error"])
+        self.assertFalse((self.vault_dir.parent / "escaped").exists())
+
+    def test_unchanged_files_are_not_recopied(self):
+        kwargs = dict(agent_root=str(self.agent_root), vault_dir=str(self.vault_dir), output_json=True)
+        sync_brain(**kwargs)
+        target = self.vault_dir / "_Agent_Sync" / "memories" / "profile.md"
+        before = target.stat().st_mtime_ns
+        sync_brain(**kwargs)
+        self.assertEqual(target.stat().st_mtime_ns, before)
+        self.assertEqual(sync_brain(**kwargs)["counts"]["total"], 4)
 
 
 if __name__ == "__main__":

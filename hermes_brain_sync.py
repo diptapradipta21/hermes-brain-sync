@@ -22,6 +22,20 @@ DEFAULT_EXCLUDES = [
 ]
 
 
+__version__ = "1.1.0"
+
+
+def validate_sync_folder(sync_folder: str) -> Optional[str]:
+    """Return an error message if sync_folder could escape the vault, else None."""
+    name = (sync_folder or "").strip()
+    if not name:
+        return "sync folder name must not be empty"
+    path = Path(name)
+    if path.is_absolute() or ".." in path.parts:
+        return f"sync folder must be a relative path inside the vault, got: {sync_folder}"
+    return None
+
+
 def run_cmd(cmd: List[str], cwd: Optional[Path] = None) -> Tuple[bool, str, str]:
     res = subprocess.run(cmd, cwd=cwd, shell=False, capture_output=True, text=True)
     return res.returncode == 0, res.stdout.strip(), res.stderr.strip()
@@ -53,6 +67,15 @@ def collect_files(source_dir: Path, exclude_patterns: List[str]) -> List[Path]:
     return collected
 
 
+def _same_file(src: Path, dst: Path) -> bool:
+    """True when dst already matches src in size and mtime (cheap copy skip)."""
+    try:
+        a, b = src.stat(), dst.stat()
+    except OSError:
+        return False
+    return a.st_size == b.st_size and a.st_mtime_ns == b.st_mtime_ns
+
+
 def mirror_directory(
     src: Path,
     dst: Path,
@@ -69,6 +92,9 @@ def mirror_directory(
         dst_file = dst / rel
         if not dry_run:
             dst_file.parent.mkdir(parents=True, exist_ok=True)
+            if _same_file(src_file, dst_file):
+                copied += 1
+                continue
             shutil.copy2(src_file, dst_file)
         copied += 1
 
@@ -102,6 +128,21 @@ def sync_brain(
     commit_msg: Optional[str] = None,
     output_json: bool = False,
 ) -> Dict[str, Any]:
+    folder_error = validate_sync_folder(sync_folder)
+    if folder_error:
+        msg = f"Invalid --sync-folder: {folder_error}"
+        if not output_json:
+            print(f"[!] Error: {msg}", file=sys.stderr)
+        return {
+            "status": "error",
+            "mode": "restore" if restore else "sync",
+            "error": msg,
+            "counts": {"memories": 0, "skills": 0, "scripts": 0, "total": 0},
+            "pruned": 0,
+            "git_pushed": False,
+            "git_output": None,
+        }
+
     agent_path = Path(agent_root).resolve()
     vault_path = Path(vault_dir).resolve()
     sync_path = vault_path / sync_folder
@@ -228,6 +269,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Hermes Brain Sync: Automated Git/Obsidian bi-directional mirror for AI agents."
     )
+    parser.add_argument("--version", action="version", version=f"hermes-brain-sync {__version__}")
     parser.add_argument("--agent-root", default=".", help="Path to AI agent working directory (default: current dir)")
     parser.add_argument("--vault", required=True, help="Path to your Obsidian Vault directory")
     parser.add_argument("--sync-folder", default="_Agent_Sync", help="Subfolder name inside vault (default: _Agent_Sync)")
